@@ -130,18 +130,21 @@ class WOTGraphWalker(object):
         visited = visited.union((to_key,))
 
         if to_key.lower() in present_keys and present_keys[to_key.lower()].valid:
-            return []
+            return []  # to_key is already in keyring and valid
 
         paths = serverresponse["xpaths"]  # an array of paths
-        needed_keys = set()
+
         if len(paths) < marginals_needed:
             print("Not enough paths from \"{0}\" to \"{1}\"".format(serverresponse["FROM"]["uid"], serverresponse["TO"]["uid"]), file=sys.stderr)
             return None
+
         valid_paths = 0
+        needed_keys = set()
+        full_trust_encountered = False
         for path in paths:
             potential_signer = path[-2]["kid"].lower()
-
             new_keys = set()
+
             if valid_paths >= marginals_needed:
                 break
 
@@ -154,9 +157,11 @@ class WOTGraphWalker(object):
                 valid_paths += 1
                 needed_keys.update(continuation_state[1])
             elif continuation_state[0] is SubpathState.SUFFICIENT:
-                return [to_key]
+                needed_keys.update(continuation_state[1])
+                full_trust_encountered = True
+                break
 
-        if valid_paths >= marginals_needed:
+        if full_trust_encountered or valid_paths >= marginals_needed:
             self.__context.add_signer(to_key)
             if not to_key in present_keys:
                 needed_keys.add(to_key)
