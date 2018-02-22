@@ -112,7 +112,7 @@ class WOTGraphWalker(object):
     def get_keys_needed(self, to_key, visited):
         return self._get_keys_needed(to_key, visited, self.get_pathinfos(to_key))
 
-    def _get_keys_needed(self, to_key, visited, res):
+    def _get_keys_needed(self, to_key, visited, serverresponse):
         from_key = self.__fkey
         marginals_needed = self.__marginals
         present_keys = self.__present
@@ -121,10 +121,10 @@ class WOTGraphWalker(object):
         if to_key.lower() in present_keys and present_keys[to_key.lower()].valid:
             return []
 
-        paths = res["xpaths"]  # an array of paths
+        paths = serverresponse["xpaths"]  # an array of paths
         needed_keys = set()
-        if len(paths) < 3:
-            print("Not enough paths from \"{0}\" to \"{1}\"".format(res["FROM"]["uid"], res["TO"]["uid"]), file=sys.stderr)
+        if len(paths) < marginals_needed:
+            print("Not enough paths from \"{0}\" to \"{1}\"".format(serverresponse["FROM"]["uid"], serverresponse["TO"]["uid"]), file=sys.stderr)
             return None
         valid_paths = 0
         for path in paths:
@@ -155,10 +155,10 @@ class WOTGraphWalker(object):
             self.__context.add_signer(to_key)
             if not to_key in present_keys:
                 needed_keys.add(to_key)
-            print("Needed keys from \"{0}\" to \"{1}\": {2}".format(res["FROM"]["uid"], res["TO"]["uid"], len(needed_keys)), file=sys.stderr)
+            print("Needed keys from \"{0}\" to \"{1}\": {2}".format(serverresponse["FROM"]["uid"], serverresponse["TO"]["uid"], len(needed_keys)), file=sys.stderr)
             return needed_keys
         else:
-            print("Not enough paths from \"{0}\" to \"{1}\"".format(res["FROM"]["uid"], res["TO"]["uid"]), file=sys.stderr)
+            print("Not enough paths from \"{0}\" to \"{1}\"".format(serverresponse["FROM"]["uid"], serverresponse["TO"]["uid"]), file=sys.stderr)
             return None
 
 
