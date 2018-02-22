@@ -7,6 +7,7 @@ import gnupg
 import sys
 from collections import namedtuple
 from threading import Lock
+from enum import Enum
 
 server = "https://pgp.cs.uu.nl"
 urltemplate = string.Template(server + "/paths/${from_}/to/${to_}.json")
@@ -63,6 +64,12 @@ class WOTGraphWalker(object):
             with self.__lock:
                 return item in self.__future_signers
 
+    class SubpathState(Enum):
+        UNKNOWN = 0
+        VALID = 1
+        INVALID = 2
+        SUFFICIENT = 3
+
     def __init__(self, from_key, marginals_needed, present_keys):
         self.__fkey = from_key.lower()
         self.__marginals = marginals_needed
@@ -73,6 +80,7 @@ class WOTGraphWalker(object):
         from_key = self.__fkey
         marginals_needed = self.__marginals
         present_keys = self.__present
+        SubpathState = self.SubpathState
 
         if to_key.lower() in present_keys and present_keys[to_key.lower()].valid:
             return []
@@ -82,48 +90,54 @@ class WOTGraphWalker(object):
         res = r.json()
         print("TO: {0}".format(res["TO"]["uid"]), file=sys.stderr)
         paths = res["xpaths"]  # an array of paths
-        needed_keys = []
+        needed_keys = set()
         if len(paths) < 3:
             print("Not enough paths from \"{0}\" to \"{1}\"".format(res["FROM"]["uid"], res["TO"]["uid"]), file=sys.stderr)
             return None
         valid_paths = 0
         for path in paths:
             potential_signer = path[-2]["kid"].lower()
-            if self.__context.in_invalid(potential_signer) or potential_signer in visited:
-                continue
-            if potential_signer == from_key.lower():
-                # from self to self always works
-                return []
-            if potential_signer in present_keys:
-                keyinfo = present_keys[potential_signer]
-                if keyinfo.fully_trusted:
-                    # we can immediately trust this key
-                    return [to_key]
-                elif keyinfo.valid:
-                    # if the potential_signer is valid, we have a valid path
-                    valid_paths += 1
-                    continue
+            continuation_state = (SubpathState.UNKNOWN, None)
+            new_keys = set()
+            if valid_paths >= marginals_needed:
+                break
             if self.__context.in_signers(potential_signer):
                 # if we already have marginals_needed paths to this key, we do not need
                 # more keys for this one and we have a valid path
+                continuation_state = (SubpathState.VALID, [])
+            elif self.__context.in_invalid(potential_signer) or potential_signer in visited:
+                continuation_state = (SubpathState.INVALID, None)
+            elif potential_signer == from_key.lower():
+                # from self to self always works
+                continuation_state = (SubpathState.SUFFICIENT, [])
+            elif potential_signer in present_keys:
+                keyinfo = present_keys[potential_signer]
+                if keyinfo.fully_trusted:
+                    # we can immediately trust this to_key
+                    continuation_state = (SubpathState.SUFFICIENT, [])
+                elif keyinfo.valid:
+                    # if the potential_signer is valid, we have a valid path
+                    continuation_state = (SubpathState.VALID, [])
+
+            if continuation_state[0] is SubpathState.UNKNOWN:
+                needed = self.get_keys_needed(potential_signer, visited.union((to_key,)))
+                if(needed is not None):
+                    # we can use this key when we import the needed keys
+                    continuation_state = (SubpathState.VALID, needed)
+                else:
+                    continuation_state = (SubpathState.INVALID, None)
+                    self.__context.add_invalid(potential_signer)
+
+            if continuation_state[0] is SubpathState.VALID:
                 valid_paths += 1
-                continue
-            if valid_paths >= marginals_needed:
-                break
-            needed = self.get_keys_needed(potential_signer, visited.union((to_key,)))
-            if(needed is not None):
-                # we can use this key when we import the needed keys
-                needed_keys.extend(needed)
-                valid_paths += 1
-                if valid_paths >= marginals_needed:
-                    break
-            else:
-                self.__context.add_invalid(potential_signer)
+                needed_keys.update(continuation_state[1])
+            elif continuation_state[0] is SubpathState.SUFFICIENT:
+                return [to_key]
 
         if valid_paths >= marginals_needed:
             self.__context.add_signer(to_key)
             if not to_key in present_keys:
-                needed_keys.append(to_key)
+                needed_keys.add(to_key)
             print("Needed keys from \"{0}\" to \"{1}\": {2}".format(res["FROM"]["uid"], res["TO"]["uid"], len(needed_keys)), file=sys.stderr)
             return needed_keys
         else:
