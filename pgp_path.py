@@ -5,6 +5,7 @@ import string
 import requests
 import gnupg
 import sys
+from collections import namedtuple
 
 server = "https://pgp.cs.uu.nl"
 urltemplate = string.Template(server + "/paths/${from_}/to/${to_}.json")
@@ -43,74 +44,75 @@ class WOTGraphWalker(object):
         self.__fkey = from_key.lower()
         self.__marginals = marginals_needed
         self.__present = present_keys
+        self.__future_signers = set()
+        self.__invalid_keys = set()
 
-    def get_keys_needed(self, to_key, future_signers, invalid_keys, visited):
+    def get_keys_needed(self, to_key, visited):
         from_key = self.__fkey
         marginals_needed = self.__marginals
         present_keys = self.__present
+        invalid_keys = self.__invalid_keys
+        future_signers = self.__future_signers
+
         if to_key.lower() in present_keys and present_keys[to_key.lower()].valid:
             return []
-        try:
-            visited.add(to_key)  # for loop prevention
-            r = requests.get(from_to_url(from_key, to_key))
-            r.raise_for_status()
-            res = r.json()
-            print("TO: {0}".format(res["TO"]["uid"]), file=sys.stderr)
-            paths = res["xpaths"]  # an array of paths
-            needed_keys = []
-            if len(paths) < 3:
-                print("Not enough paths from \"{0}\" to \"{1}\"".format(res["FROM"]["uid"], res["TO"]["uid"]), file=sys.stderr)
-                return None
-            valid_paths = 0
-            for path in paths:
-                potential_signer = path[-2]["kid"].lower()
-                if potential_signer in invalid_keys or potential_signer in visited:
-                    continue
-                if potential_signer == from_key.lower():
-                    # from self to self always works
-                    return []
-                if potential_signer in present_keys:
-                    keyinfo = present_keys[potential_signer]
-                    if keyinfo.fully_trusted:
-                        # we can immediately trust this key
-                        return [to_key]
-                    elif keyinfo.valid:
-                        # if the potential_signer is valid, we have a valid path
-                        valid_paths += 1
-                        continue
-                if potential_signer in future_signers:
-                    # if we already have marginals_needed paths to this key, we do not need
-                    # more keys for this one and we have a valid path
+
+        r = requests.get(from_to_url(from_key, to_key))
+        r.raise_for_status()
+        res = r.json()
+        print("TO: {0}".format(res["TO"]["uid"]), file=sys.stderr)
+        paths = res["xpaths"]  # an array of paths
+        needed_keys = []
+        if len(paths) < 3:
+            print("Not enough paths from \"{0}\" to \"{1}\"".format(res["FROM"]["uid"], res["TO"]["uid"]), file=sys.stderr)
+            return None
+        valid_paths = 0
+        for path in paths:
+            potential_signer = path[-2]["kid"].lower()
+            if potential_signer in invalid_keys or potential_signer in visited:
+                continue
+            if potential_signer == from_key.lower():
+                # from self to self always works
+                return []
+            if potential_signer in present_keys:
+                keyinfo = present_keys[potential_signer]
+                if keyinfo.fully_trusted:
+                    # we can immediately trust this key
+                    return [to_key]
+                elif keyinfo.valid:
+                    # if the potential_signer is valid, we have a valid path
                     valid_paths += 1
                     continue
+            if potential_signer in future_signers:
+                # if we already have marginals_needed paths to this key, we do not need
+                # more keys for this one and we have a valid path
+                valid_paths += 1
+                continue
+            if valid_paths >= marginals_needed:
+                break
+            needed = self.get_keys_needed(potential_signer, visited.union((to_key,)))
+            if(needed is not None):
+                # we can use this key when we import the needed keys
+                needed_keys.extend(needed)
+                valid_paths += 1
                 if valid_paths >= marginals_needed:
                     break
-                needed = self.get_keys_needed(potential_signer, future_signers, invalid_keys, visited)
-                if(needed is not None):
-                    # we can use this key when we import the needed keys
-                    needed_keys.extend(needed)
-                    needed_keys.append(potential_signer)
-                    valid_paths += 1
-                    if valid_paths >= marginals_needed:
-                        break
-                else:
-                    invalid_keys.add(potential_signer)
-
-            if valid_paths >= marginals_needed:
-                future_signers.add(to_key)
-                if not to_key in present_keys:
-                    needed_keys.append(to_key)
-                print("Needed keys from \"{0}\" to \"{1}\": {2}".format(res["FROM"]["uid"], res["TO"]["uid"], len(needed_keys)), file=sys.stderr)
-                return needed_keys
             else:
-                print("Not enough paths from \"{0}\" to \"{1}\"".format(res["FROM"]["uid"], res["TO"]["uid"]), file=sys.stderr)
-                return None
-        finally:
-            visited.remove(to_key)
+                invalid_keys.add(potential_signer)
+
+        if valid_paths >= marginals_needed:
+            future_signers.add(to_key)
+            if not to_key in present_keys:
+                needed_keys.append(to_key)
+            print("Needed keys from \"{0}\" to \"{1}\": {2}".format(res["FROM"]["uid"], res["TO"]["uid"], len(needed_keys)), file=sys.stderr)
+            return needed_keys
+        else:
+            print("Not enough paths from \"{0}\" to \"{1}\"".format(res["FROM"]["uid"], res["TO"]["uid"]), file=sys.stderr)
+            return None
 
 
 def main():
-    keys = WOTGraphWalker("9c5a87fcfd375565", 3, get_present_keys()).get_keys_needed("E5CA8C4925E4205F", set(), set(), set())
+    keys = WOTGraphWalker("9c5a87fcfd375565", 3, get_present_keys()).get_keys_needed("dc80f2a6d5327cb9", frozenset())
     sys.stdout.write("\n".join(keys))
 
 if __name__ == '__main__':
