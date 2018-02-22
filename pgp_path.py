@@ -112,11 +112,22 @@ class WOTGraphWalker(object):
     def get_keys_needed(self, to_key, visited):
         return self._get_keys_needed(to_key, visited, self.get_pathinfos(to_key))
 
+    def walk_sub_path(self, potential_signer, visited):
+        needed = self.get_keys_needed(potential_signer, visited)
+        if(needed is not None):
+            # we can use this key when we import the needed keys
+            continuation_state = (self.SubpathState.VALID, needed)
+        else:
+            continuation_state = (self.SubpathState.INVALID, None)
+            self.__context.add_invalid(potential_signer)
+        return continuation_state
+
     def _get_keys_needed(self, to_key, visited, serverresponse):
         from_key = self.__fkey
         marginals_needed = self.__marginals
         present_keys = self.__present
         SubpathState = self.SubpathState
+        visited = visited.union((to_key,))
 
         if to_key.lower() in present_keys and present_keys[to_key.lower()].valid:
             return []
@@ -137,13 +148,7 @@ class WOTGraphWalker(object):
             continuation_state = self.check_key_state(potential_signer, visited)
 
             if continuation_state[0] is SubpathState.UNKNOWN:
-                needed = self.get_keys_needed(potential_signer, visited.union((to_key,)))
-                if(needed is not None):
-                    # we can use this key when we import the needed keys
-                    continuation_state = (SubpathState.VALID, needed)
-                else:
-                    continuation_state = (SubpathState.INVALID, None)
-                    self.__context.add_invalid(potential_signer)
+                continuation_state = self.walk_sub_path(potential_signer, visited)
 
             if continuation_state[0] is SubpathState.VALID:
                 valid_paths += 1
