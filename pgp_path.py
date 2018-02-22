@@ -76,7 +76,43 @@ class WOTGraphWalker(object):
         self.__present = present_keys
         self.__context = self.WalkerContext()
 
+    def check_key_state(self, potential_signer, visited):
+        from_key = self.__fkey
+        present_keys = self.__present
+        SubpathState = self.SubpathState
+        continuation_state = (SubpathState.UNKNOWN, None)
+        
+        if self.__context.in_signers(potential_signer):
+            # if we already have marginals_needed paths to this key, we do not need
+            # more keys for this one and we have a valid path
+            continuation_state = (SubpathState.VALID, [])
+        elif self.__context.in_invalid(potential_signer) or potential_signer in visited:
+            continuation_state = (SubpathState.INVALID, None)
+        elif potential_signer == from_key.lower():
+            # from self to self always works
+            continuation_state = (SubpathState.SUFFICIENT, [])
+        elif potential_signer in present_keys:
+            keyinfo = present_keys[potential_signer]
+            if keyinfo.fully_trusted:
+                # we can immediately trust this to_key
+                continuation_state = (SubpathState.SUFFICIENT, [])
+            elif keyinfo.valid:
+                # if the potential_signer is valid, we have a valid path
+                continuation_state = (SubpathState.VALID, [])
+        return continuation_state
+
+    def get_pathinfos(self, to_key):
+        from_key = self.__fkey
+        r = requests.get(from_to_url(from_key, to_key))
+        r.raise_for_status()
+        res = r.json()
+        print("Requesting paths for: {0}".format(res["TO"]["uid"]), file=sys.stderr)
+        return res
+
     def get_keys_needed(self, to_key, visited):
+        return self._get_keys_needed(to_key, visited, self.get_pathinfos(to_key))
+
+    def _get_keys_needed(self, to_key, visited, res):
         from_key = self.__fkey
         marginals_needed = self.__marginals
         present_keys = self.__present
@@ -85,10 +121,6 @@ class WOTGraphWalker(object):
         if to_key.lower() in present_keys and present_keys[to_key.lower()].valid:
             return []
 
-        r = requests.get(from_to_url(from_key, to_key))
-        r.raise_for_status()
-        res = r.json()
-        print("TO: {0}".format(res["TO"]["uid"]), file=sys.stderr)
         paths = res["xpaths"]  # an array of paths
         needed_keys = set()
         if len(paths) < 3:
@@ -97,27 +129,12 @@ class WOTGraphWalker(object):
         valid_paths = 0
         for path in paths:
             potential_signer = path[-2]["kid"].lower()
-            continuation_state = (SubpathState.UNKNOWN, None)
+
             new_keys = set()
             if valid_paths >= marginals_needed:
                 break
-            if self.__context.in_signers(potential_signer):
-                # if we already have marginals_needed paths to this key, we do not need
-                # more keys for this one and we have a valid path
-                continuation_state = (SubpathState.VALID, [])
-            elif self.__context.in_invalid(potential_signer) or potential_signer in visited:
-                continuation_state = (SubpathState.INVALID, None)
-            elif potential_signer == from_key.lower():
-                # from self to self always works
-                continuation_state = (SubpathState.SUFFICIENT, [])
-            elif potential_signer in present_keys:
-                keyinfo = present_keys[potential_signer]
-                if keyinfo.fully_trusted:
-                    # we can immediately trust this to_key
-                    continuation_state = (SubpathState.SUFFICIENT, [])
-                elif keyinfo.valid:
-                    # if the potential_signer is valid, we have a valid path
-                    continuation_state = (SubpathState.VALID, [])
+
+            continuation_state = self.check_key_state(potential_signer, visited)
 
             if continuation_state[0] is SubpathState.UNKNOWN:
                 needed = self.get_keys_needed(potential_signer, visited.union((to_key,)))
