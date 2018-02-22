@@ -10,23 +10,42 @@ server = "https://pgp.cs.uu.nl"
 urltemplate = string.Template(server + "/paths/${from_}/to/${to_}.json")
 
 
+class KeyInfo(object):
+    "class representing some information about a key"
+
+    def __init__(self, key_properties):
+        ":param key_properties: a python-gnupg list-keys response entry"
+        self.__key_properties = key_properties
+
+    @property
+    def valid(self):
+        "we trust that this key belongs to the user as indicated by its uid"
+        self.__key_properties["trust"] == "f"
+
+    @property
+    def fully_trusted(self):
+        "key valid and has full ownertrust"
+        return self.valid and self.__key_properties["ownertrust"] == "f"
+
+
 def from_to_url(from_key, to_key):
     return urltemplate.safe_substitute(from_=quote(from_key), to_=quote(to_key))
 
 
 def get_present_keys():
     gpg = gnupg.GPG()
-    return dict(((key["keyid"].lower(), key) for key in gpg.list_keys()))
+    return dict(((key["keyid"].lower(), KeyInfo(key)) for key in gpg.list_keys()))
 
 
-def get_keys_needed(from_key, to_key, marginals_needed, present_keys, future_signers, invalid_keys, visited):
+def get_keys_needed(from_key, to_key, marginals_needed, present_keys,
+                    future_signers, invalid_keys, visited):
     try:
-        visited.add(to_key)
+        visited.add(to_key)  # for loop prevention
         r = requests.get(from_to_url(from_key, to_key))
         r.raise_for_status()
         res = r.json()
         print("TO: {0}".format(res["TO"]["uid"]), file=sys.stderr)
-        paths = res["xpaths"]
+        paths = res["xpaths"]  # an array of paths
         needed_keys = []
         if len(paths) < 3:
             print("Not enough paths from \"{0}\" to \"{1}\"".format(res["FROM"]["uid"], res["TO"]["uid"]), file=sys.stderr)
@@ -41,10 +60,10 @@ def get_keys_needed(from_key, to_key, marginals_needed, present_keys, future_sig
                 return []
             if potential_signer in present_keys:
                 keyinfo = present_keys[potential_signer]
-                if keyinfo["ownertrust"] == "f":
+                if keyinfo.fully_trusted:
                     # we can immediately trust this key
                     return [to_key]
-                elif keyinfo["trust"] == "f":
+                elif keyinfo.valid:
                     # if the potential_signer is valid, we have a valid path
                     valid_paths += 1
                     continue
@@ -63,7 +82,7 @@ def get_keys_needed(from_key, to_key, marginals_needed, present_keys, future_sig
                     break
             else:
                 invalid_keys.add(potential_signer)
-    
+
         if valid_paths >= marginals_needed:
             future_signers.add(to_key)
             if not from_key in present_keys:
@@ -78,7 +97,7 @@ def get_keys_needed(from_key, to_key, marginals_needed, present_keys, future_sig
 
 
 def main():
-    keys = get_keys_needed("9c5a87fcfd375565", "04b5bf355770834a", 3, get_present_keys(), set(), set(), set())
+    keys = get_keys_needed("9c5a87fcfd375565", "8b962943fc243f3c", 3, get_present_keys(), set(), set(), set())
     sys.stdout.write("\n".join(keys))
 
 if __name__ == '__main__':
