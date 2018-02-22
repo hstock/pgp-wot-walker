@@ -138,15 +138,15 @@ class WOTGraphWalker(object):
             print("Not enough paths from \"{0}\" to \"{1}\"".format(serverresponse["FROM"]["uid"], serverresponse["TO"]["uid"]), file=sys.stderr)
             return None
 
+        potentials_signers = [path[-2]["kid"].lower() for path in paths]
+
         valid_paths = 0
         needed_keys = set()
         full_trust_encountered = False
-        for path in paths:
-            potential_signer = path[-2]["kid"].lower()
-            new_keys = set()
+        for potentials_signer in potentials_signers:
 
             if valid_paths >= marginals_needed:
-                break
+                pass
 
             continuation_state = self.check_key_state(potential_signer, visited)
 
@@ -159,7 +159,7 @@ class WOTGraphWalker(object):
             elif continuation_state[0] is SubpathState.SUFFICIENT:
                 needed_keys.update(continuation_state[1])
                 full_trust_encountered = True
-                break
+
 
         if full_trust_encountered or valid_paths >= marginals_needed:
             self.__context.add_signer(to_key)
