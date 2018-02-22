@@ -6,6 +6,7 @@ import requests
 import gnupg
 import sys
 from collections import namedtuple
+from threading import Lock
 
 server = "https://pgp.cs.uu.nl"
 urltemplate = string.Template(server + "/paths/${from_}/to/${to_}.json")
@@ -40,19 +41,38 @@ def get_present_keys():
 
 class WOTGraphWalker(object):
 
+    class WalkerContext(object):
+        def __init__(self):
+            self.__future_signers = set()
+            self.__invalid_keys = set()
+            self.__lock = Lock()
+
+        def add_invalid(self, item):
+            with self.__lock:
+                self.__invalid_keys.add(item)
+
+        def add_signer(self, item):
+            with self.__lock:
+                self.__future_signers.add(item)
+
+        def in_invalid(self, item):
+            with self.__lock:
+                return item in self.__invalid_keys
+
+        def in_signers(self, item):
+            with self.__lock:
+                return item in self.__future_signers
+
     def __init__(self, from_key, marginals_needed, present_keys):
         self.__fkey = from_key.lower()
         self.__marginals = marginals_needed
         self.__present = present_keys
-        self.__future_signers = set()
-        self.__invalid_keys = set()
+        self.__context = self.WalkerContext()
 
     def get_keys_needed(self, to_key, visited):
         from_key = self.__fkey
         marginals_needed = self.__marginals
         present_keys = self.__present
-        invalid_keys = self.__invalid_keys
-        future_signers = self.__future_signers
 
         if to_key.lower() in present_keys and present_keys[to_key.lower()].valid:
             return []
@@ -69,7 +89,7 @@ class WOTGraphWalker(object):
         valid_paths = 0
         for path in paths:
             potential_signer = path[-2]["kid"].lower()
-            if potential_signer in invalid_keys or potential_signer in visited:
+            if self.__context.in_invalid(potential_signer) or potential_signer in visited:
                 continue
             if potential_signer == from_key.lower():
                 # from self to self always works
@@ -83,7 +103,7 @@ class WOTGraphWalker(object):
                     # if the potential_signer is valid, we have a valid path
                     valid_paths += 1
                     continue
-            if potential_signer in future_signers:
+            if self.__context.in_signers(potential_signer):
                 # if we already have marginals_needed paths to this key, we do not need
                 # more keys for this one and we have a valid path
                 valid_paths += 1
@@ -98,10 +118,10 @@ class WOTGraphWalker(object):
                 if valid_paths >= marginals_needed:
                     break
             else:
-                invalid_keys.add(potential_signer)
+                self.__context.add_invalid(potential_signer)
 
         if valid_paths >= marginals_needed:
-            future_signers.add(to_key)
+            self.__context.add_signer(to_key)
             if not to_key in present_keys:
                 needed_keys.append(to_key)
             print("Needed keys from \"{0}\" to \"{1}\": {2}".format(res["FROM"]["uid"], res["TO"]["uid"], len(needed_keys)), file=sys.stderr)
