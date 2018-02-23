@@ -112,8 +112,8 @@ class WOTGraphWalker(object):
     def get_keys_needed(self, to_key, visited):
         return self._get_keys_needed(to_key, visited, self.get_pathinfos(to_key))
 
-    def walk_sub_path(self, potential_signer, visited):
-        needed = self.get_keys_needed(potential_signer, visited)
+    def _walk_sub_path(self, potential_signer, visited, serverresponse):
+        needed = self._get_keys_needed(potential_signer, visited, serverresponse)
         if(needed is not None):
             # we can use this key when we import the needed keys
             continuation_state = (self.SubpathState.VALID, needed)
@@ -186,7 +186,7 @@ class WOTGraphWalker(object):
             unresolved_paths,
             needed_keys,
             valid_paths,
-            lambda key: self.walk_sub_path(key, visited))
+            lambda key: self._walk_sub_path(key, visited, self.get_pathinfos(key)))
 
         if full_trust_encountered or valid_paths >= marginals_needed:
             self._prepare_success(needed_keys, serverresponse, to_key)
