@@ -122,6 +122,39 @@ class WOTGraphWalker(object):
             self.__context.add_invalid(potential_signer)
         return continuation_state
 
+    def _validation_loop(self, potentials_signers, visited):
+        marginals_needed = self.__marginals
+        SubpathState = self.SubpathState
+
+        valid_paths = 0
+        needed_keys = set()
+        full_trust_encountered = False
+        unresolved_paths = potentials_signers.copy()
+        for potential_signer in potentials_signers:
+            if valid_paths >= marginals_needed:
+                break
+
+            continuation_state = self.check_key_state(potential_signer, visited)
+
+            if continuation_state[0] is SubpathState.UNKNOWN:
+                continuation_state = self.walk_sub_path(potential_signer, visited)
+
+            if continuation_state[0] is SubpathState.VALID:
+                valid_paths += 1
+                needed_keys.update(continuation_state[1])
+                unresolved_paths.pop(potential_signer)
+            elif continuation_state[0] is SubpathState.SUFFICIENT:
+                needed_keys.update(continuation_state[1])
+                full_trust_encountered = True
+
+        return full_trust_encountered, needed_keys, valid_paths, unresolved_paths
+
+    def _prepare_success(self, needed_keys, serverresponse, to_key):
+        self.__context.add_signer(to_key)
+        if not to_key in self.__present:
+            needed_keys.add(to_key)
+        print("Needed keys from \"{0}\" to \"{1}\": {2}".format(serverresponse["FROM"]["uid"], serverresponse["TO"]["uid"], len(needed_keys)), file=sys.stderr)
+
     def _get_keys_needed(self, to_key, visited, serverresponse):
         from_key = self.__fkey
         marginals_needed = self.__marginals
@@ -140,32 +173,10 @@ class WOTGraphWalker(object):
 
         potentials_signers = [path[-2]["kid"].lower() for path in paths]
 
-        valid_paths = 0
-        needed_keys = set()
-        full_trust_encountered = False
-        for potentials_signer in potentials_signers:
-
-            if valid_paths >= marginals_needed:
-                pass
-
-            continuation_state = self.check_key_state(potential_signer, visited)
-
-            if continuation_state[0] is SubpathState.UNKNOWN:
-                continuation_state = self.walk_sub_path(potential_signer, visited)
-
-            if continuation_state[0] is SubpathState.VALID:
-                valid_paths += 1
-                needed_keys.update(continuation_state[1])
-            elif continuation_state[0] is SubpathState.SUFFICIENT:
-                needed_keys.update(continuation_state[1])
-                full_trust_encountered = True
-
+        full_trust_encountered, needed_keys, valid_paths, unresolved_paths = self._validation_loop(potentials_signers, visited)
 
         if full_trust_encountered or valid_paths >= marginals_needed:
-            self.__context.add_signer(to_key)
-            if not to_key in present_keys:
-                needed_keys.add(to_key)
-            print("Needed keys from \"{0}\" to \"{1}\": {2}".format(serverresponse["FROM"]["uid"], serverresponse["TO"]["uid"], len(needed_keys)), file=sys.stderr)
+            self._prepare_success(needed_keys, serverresponse, to_key)
             return needed_keys
         else:
             print("Not enough paths from \"{0}\" to \"{1}\"".format(serverresponse["FROM"]["uid"], serverresponse["TO"]["uid"]), file=sys.stderr)
