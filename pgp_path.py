@@ -122,27 +122,24 @@ class WOTGraphWalker(object):
             self.__context.add_invalid(potential_signer)
         return continuation_state
 
-    def _validation_loop(self, potentials_signers, visited):
+    def _validation_loop(self, potentials_signers, needed_keys_, valid_paths_, check_fun):
         marginals_needed = self.__marginals
         SubpathState = self.SubpathState
 
-        valid_paths = 0
-        needed_keys = set()
+        valid_paths = valid_paths_
+        needed_keys = needed_keys_.copy()
         full_trust_encountered = False
         unresolved_paths = potentials_signers.copy()
         for potential_signer in potentials_signers:
             if valid_paths >= marginals_needed:
                 break
 
-            continuation_state = self.check_key_state(potential_signer, visited)
-
-            if continuation_state[0] is SubpathState.UNKNOWN:
-                continuation_state = self.walk_sub_path(potential_signer, visited)
+            continuation_state = check_fun(potential_signer)
 
             if continuation_state[0] is SubpathState.VALID:
                 valid_paths += 1
                 needed_keys.update(continuation_state[1])
-                unresolved_paths.pop(potential_signer)
+                unresolved_paths.remove(potential_signer)
             elif continuation_state[0] is SubpathState.SUFFICIENT:
                 needed_keys.update(continuation_state[1])
                 full_trust_encountered = True
@@ -173,7 +170,23 @@ class WOTGraphWalker(object):
 
         potentials_signers = [path[-2]["kid"].lower() for path in paths]
 
-        full_trust_encountered, needed_keys, valid_paths, unresolved_paths = self._validation_loop(potentials_signers, visited)
+        # --- Pre-Check without needing online information ---
+        full_trust_encountered, needed_keys, valid_paths, unresolved_paths = self._validation_loop(
+            potentials_signers,
+            set(),
+            0,
+            lambda key: self.check_key_state(key, visited))
+
+        if full_trust_encountered or valid_paths >= marginals_needed:
+            self._prepare_success(needed_keys, serverresponse, to_key)
+            return needed_keys
+
+        # --- full check getting information for unresolved paths ---
+        full_trust_encountered, needed_keys, valid_paths, unresolved_paths = self._validation_loop(
+            unresolved_paths,
+            needed_keys,
+            valid_paths,
+            lambda key: self.walk_sub_path(key, visited))
 
         if full_trust_encountered or valid_paths >= marginals_needed:
             self._prepare_success(needed_keys, serverresponse, to_key)
